@@ -13,7 +13,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   # Image is public (build environment only — no secrets inside)
-  IMAGE_NAME: ${{ github.repository_owner }}/speedynote-android-builder
+  
   MUPDF_VERSION: 1.24.10
 
 jobs:
@@ -23,6 +23,14 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+              # GHCR requires the repository path to be lowercase; GitHub usernames may
+      # contain capitals (e.g. "XiaoJue0721"), so derive the image name here.
+      - name: Compute lowercase image name
+        id: image
+        run: |
+          IMAGE=$(echo "${{ github.repository_owner }}/speedynote-android-builder" | tr '[:upper:]' '[:lower:]')
+          echo "name=$IMAGE" >> $GITHUB_OUTPUT
+          echo "Docker image: $IMAGE"
 
       # -------------------------------------------------------------------------
       # Docker image — rebuild only when android/Dockerfile changes.
@@ -44,8 +52,8 @@ jobs:
         id: docker-tag
         run: |
           HASH=$(sha256sum android/Dockerfile | cut -c1-12)
-          echo "tag=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "Docker image tag: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${HASH}"
+          echo "tag=${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${HASH}" >> $GITHUB_OUTPUT
+          echo "Docker image tag: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${HASH}"
 
       - name: Build and push Docker image (BuildKit layer cache in GHCR)
         uses: docker/build-push-action@v6
@@ -55,8 +63,8 @@ jobs:
           tags: ${{ steps.docker-tag.outputs.tag }}
           # Registry-based cache survives across runners and is not bound by the
           # 10 GB GHA cache limit (important for a Qt + NDK + SDK image).
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:buildcache,mode=max
 
       # -------------------------------------------------------------------------
       # MuPDF static libraries — cache the compiled output directory.
