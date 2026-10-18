@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(SET CMP0074 NEW)
 
-project(SpeedyNote VERSION 1.6.5 LANGUAGES C CXX)
+project(SpeedyNote VERSION 1.6.7 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -113,7 +113,7 @@ if(WIN32)
     # =========================================================================
     # Windows Configuration
     # =========================================================================
-    message(STATUS "🪟 Configuring for Windows")
+    message(STATUS "馃獰 Configuring for Windows")
     
     # Detect architecture and set toolchain paths
     # Only set defaults if not already provided via -DQT_PATH=...
@@ -177,14 +177,14 @@ if(WIN32)
             set(MUPDF_INCLUDE_DIR "${MUPDF_WIN32_DIR}/include")
         endif()
         if(EXISTS "${MUPDF_WIN32_DIR}/lib/libmupdf.a")
-            message(STATUS "✅ MuPDF found for PDF export (static, win32)")
+            message(STATUS "鉁?MuPDF found for PDF export (static, win32)")
             add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
             set(MUPDF_FOUND TRUE)
             set(MUPDF_LIBRARIES
                 "${MUPDF_WIN32_DIR}/lib/libmupdf.a"
                 "${MUPDF_WIN32_DIR}/lib/libmupdf-third.a")
         else()
-            message(STATUS "⚠️ MuPDF not found - PDF export will be disabled")
+            message(STATUS "鈿狅笍 MuPDF not found - PDF export will be disabled")
             message(STATUS "   Build with: ./private_scripts/build-mupdf-win32.sh (in MSYS2)")
             set(MUPDF_FOUND FALSE)
         endif()
@@ -197,7 +197,7 @@ if(WIN32)
 
         if(EXISTS "${QT_PATH}/lib/libmupdf.dll.a")
             set(MUPDF_LIBRARY "${QT_PATH}/lib/libmupdf.dll.a")
-            message(STATUS "✅ MuPDF found for PDF export (dynamic): ${MUPDF_LIBRARY}")
+            message(STATUS "鉁?MuPDF found for PDF export (dynamic): ${MUPDF_LIBRARY}")
             add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
             set(MUPDF_FOUND TRUE)
             set(MUPDF_LIBRARIES ${MUPDF_LIBRARY})
@@ -210,7 +210,7 @@ if(WIN32)
 
         elseif(EXISTS "${QT_PATH}/lib/libmupdf.a")
             set(MUPDF_LIBRARY "${QT_PATH}/lib/libmupdf.a")
-            message(STATUS "✅ MuPDF found for PDF export (static): ${MUPDF_LIBRARY}")
+            message(STATUS "鉁?MuPDF found for PDF export (static): ${MUPDF_LIBRARY}")
             add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
             set(MUPDF_FOUND TRUE)
             set(MUPDF_LIBRARIES ${MUPDF_LIBRARY})
@@ -256,7 +256,7 @@ if(WIN32)
             endif()
             message(STATUS "   Note: Statically linked (no libmupdf.dll needed)")
         else()
-            message(STATUS "⚠️ MuPDF not found - PDF export will be disabled")
+            message(STATUS "鈿狅笍 MuPDF not found - PDF export will be disabled")
             message(STATUS "   Checked: ${QT_PATH}/lib/libmupdf.dll.a (dynamic)")
             message(STATUS "   Checked: ${QT_PATH}/lib/libmupdf.a (static)")
             message(STATUS "   Install with: pacman -S ${MSYS2_PACKAGE_PREFIX}-mupdf")
@@ -273,17 +273,17 @@ if(WIN32)
 
     # CPU optimizations
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|ARM64|aarch64|AARCH64")
-        message(STATUS "🚀 Optimizing for ARM64 Windows (Snapdragon)")
+        message(STATUS "馃殌 Optimizing for ARM64 Windows (Snapdragon)")
         add_compile_options(-mcpu=cortex-a75 -march=armv8.2-a+fp16+rcpc+dotprod
             -O3 -ffast-math -ftree-vectorize -fvectorize -flto=thin
             -fomit-frame-pointer -funroll-loops -DNDEBUG)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=thin")
     elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
-        message(STATUS "🚀 Optimizing for x86 (32-bit) Windows (Core Duo / Atom+)")
+        message(STATUS "馃殌 Optimizing for x86 (32-bit) Windows (Core Duo / Atom+)")
         add_compile_options(-march=prescott -mtune=generic -mfpmath=sse
             -O3 -ffast-math -DNDEBUG)
     else()
-        message(STATUS "🚀 Optimizing for x86_64 Windows (Nehalem+)")
+        message(STATUS "馃殌 Optimizing for x86_64 Windows (Nehalem+)")
         add_compile_options(-march=nehalem -msse4.2 -O3 -ffast-math -DNDEBUG)
     endif()
 
@@ -309,7 +309,7 @@ elseif(IOS)
     # =========================================================================
     # iPadOS Configuration
     # =========================================================================
-    message(STATUS "📱 Configuring for iPadOS")
+    message(STATUS "馃摫 Configuring for iPadOS")
     
     set(CMAKE_OSX_DEPLOYMENT_TARGET "16.0" CACHE STRING "Minimum iPadOS version")
     
@@ -330,7 +330,7 @@ elseif(IOS)
     
     # MuPDF is always available on iOS (cross-compiled in Phase 2)
     add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
-    message(STATUS "✅ MuPDF PDF export enabled for iPadOS")
+    message(STATUS "鉁?MuPDF PDF export enabled for iPadOS")
     
     set(WIN_RESOURCES "")
 
@@ -338,7 +338,7 @@ elseif(APPLE)
     # =========================================================================
     # macOS Configuration
     # =========================================================================
-    message(STATUS "🍎 Configuring for macOS")
+    message(STATUS "馃崕 Configuring for macOS")
     
     # macOS 12 is the floor: it is Qt 6.9's documented minimum target, and it
     # is only reachable because the MuPDF static build below replaces the
@@ -411,7 +411,7 @@ elseif(APPLE)
         )
         set(MUPDF_FOUND TRUE)
         add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
-        message(STATUS "✅ MuPDF: self-contained static build")
+        message(STATUS "鉁?MuPDF: self-contained static build")
         message(STATUS "   ${MUPDF_STATIC_DIR}/lib/libmupdf.a")
         message(STATUS "   No Homebrew dylibs will be bundled")
     else()
@@ -442,7 +442,7 @@ elseif(APPLE)
             set(MUPDF_INCLUDE_DIR "${MUPDF_PATH}/include")
             set(MUPDF_LIBRARY_MAIN "${MUPDF_PATH}/lib/libmupdf.a")
             set(MUPDF_LIBRARY_THIRD "${MUPDF_PATH}/lib/libmupdf-third.a")
-            message(STATUS "✅ MuPDF found (static): ${MUPDF_PATH}")
+            message(STATUS "鉁?MuPDF found (static): ${MUPDF_PATH}")
             set(MUPDF_FOUND TRUE)
             break()
         # Check for shared library as fallback
@@ -450,7 +450,7 @@ elseif(APPLE)
             set(MUPDF_INCLUDE_DIR "${MUPDF_PATH}/include")
             set(MUPDF_LIBRARY_MAIN "${MUPDF_PATH}/lib/libmupdf.dylib")
             set(MUPDF_LIBRARY_THIRD "")  # Shared builds don't have -third
-            message(STATUS "✅ MuPDF found (shared): ${MUPDF_PATH}")
+            message(STATUS "鉁?MuPDF found (shared): ${MUPDF_PATH}")
             set(MUPDF_FOUND TRUE)
             break()
         endif()
@@ -511,7 +511,7 @@ elseif(APPLE)
             message(STATUS "   Found mujs: ${MUJS_LIBRARY}")
         endif()
     else()
-        message(STATUS "⚠️ MuPDF not found - PDF export will be disabled")
+        message(STATUS "鈿狅笍 MuPDF not found - PDF export will be disabled")
         message(STATUS "   Searched in:")
         foreach(MUPDF_PATH ${MUPDF_SEARCH_PATHS})
             message(STATUS "     - ${MUPDF_PATH}/lib/libmupdf.a")
@@ -530,11 +530,11 @@ elseif(APPLE)
 
     # CPU optimizations
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-        message(STATUS "🚀 Optimizing for Apple Silicon")
+        message(STATUS "馃殌 Optimizing for Apple Silicon")
         add_compile_options(-mcpu=apple-m1 -O3 -ffast-math -funroll-loops
             -fomit-frame-pointer -DNDEBUG)
     else()
-        message(STATUS "🚀 Optimizing for Intel Mac (Nehalem+)")
+        message(STATUS "馃殌 Optimizing for Intel Mac (Nehalem+)")
         add_compile_options(-march=nehalem -mtune=nehalem -msse4.2 -mpopcnt
             -O3 -ffast-math -funroll-loops -fomit-frame-pointer -DNDEBUG)
     endif()
@@ -545,7 +545,7 @@ elseif(ANDROID)
     # =========================================================================
     # Android Configuration
     # =========================================================================
-    message(STATUS "🤖 Configuring for Android")
+    message(STATUS "馃 Configuring for Android")
     
     find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Concurrent Xml Network Svg)
     
@@ -565,7 +565,7 @@ elseif(ANDROID)
     
     # Enable MuPDF export on Android (MuPDF is always available on Android)
     add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
-    message(STATUS "✅ MuPDF PDF export enabled for Android")
+    message(STATUS "鉁?MuPDF PDF export enabled for Android")
     
     set(WIN_RESOURCES "")
 
@@ -576,10 +576,10 @@ elseif(OHOS)
     # Must precede the UNIX branch: CMake reports UNIX for OHOS too, and the
     # Linux branch would otherwise run and demand Qt DBus, pkg-config and a
     # system MuPDF, none of which exist here.
-    message(STATUS "🌸 Configuring for HarmonyOS (${OHOS_ARCH})")
+    message(STATUS "馃尭 Configuring for HarmonyOS (${OHOS_ARCH})")
 
     # No DBus: notifications go through Notification Kit rather than
-    # org.freedesktop.Notifications. No Test either — the golden-image tests are
+    # org.freedesktop.Notifications. No Test either 鈥?the golden-image tests are
     # desktop-only.
     #
     # The three private modules are all for HarmonyWindowSwitch: GuiPrivate for
@@ -608,7 +608,7 @@ elseif(OHOS)
     include_directories(${CMAKE_CURRENT_BINARY_DIR} ${MUPDF_INCLUDE_DIR})
 
     add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
-    message(STATUS "✅ MuPDF PDF export enabled for HarmonyOS")
+    message(STATUS "鉁?MuPDF PDF export enabled for HarmonyOS")
 
     set(WIN_RESOURCES "")
 
@@ -616,7 +616,7 @@ elseif(UNIX)
     # =========================================================================
     # Linux Configuration
     # =========================================================================
-    message(STATUS "🐧 Configuring for Linux")
+    message(STATUS "馃惂 Configuring for Linux")
     
     # -------------------------------------------------------------------------
     # As of v1.2.1, SpeedyNote uses MuPDF exclusively on all platforms.
@@ -644,7 +644,7 @@ elseif(UNIX)
     
     if(MUPDF_LIBRARY_DYNAMIC AND NOT MUPDF_LIBRARY_DYNAMIC MATCHES "\\.a$")
         # Found dynamic library
-        message(STATUS "✅ MuPDF found for PDF export (dynamic): ${MUPDF_LIBRARY_DYNAMIC}")
+        message(STATUS "鉁?MuPDF found for PDF export (dynamic): ${MUPDF_LIBRARY_DYNAMIC}")
         add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
         set(MUPDF_FOUND TRUE)
         
@@ -667,7 +667,7 @@ elseif(UNIX)
             NO_DEFAULT_PATH)
         
         if(MUPDF_LIBRARY_STATIC)
-            message(STATUS "✅ MuPDF found for PDF export (static): ${MUPDF_LIBRARY_STATIC}")
+            message(STATUS "鉁?MuPDF found for PDF export (static): ${MUPDF_LIBRARY_STATIC}")
             add_compile_definitions(SPEEDYNOTE_MUPDF_EXPORT)
             set(MUPDF_FOUND TRUE)
             
@@ -705,7 +705,7 @@ elseif(UNIX)
                 message(STATUS "   Found mujs: ${MUJS_LIBRARY}")
             endif()
         else()
-            message(STATUS "⚠️ MuPDF not found - PDF export will be disabled")
+            message(STATUS "鈿狅笍 MuPDF not found - PDF export will be disabled")
             message(STATUS "   Install with: sudo apt install libmupdf-dev (Debian/Ubuntu)")
             message(STATUS "              or: sudo dnf install mupdf-devel (Fedora/RHEL)")
             set(MUPDF_FOUND FALSE)
@@ -716,11 +716,11 @@ elseif(UNIX)
 
     # CPU optimizations
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-        message(STATUS "🚀 Optimizing for x86_64 Linux (Nehalem+)")
+        message(STATUS "馃殌 Optimizing for x86_64 Linux (Nehalem+)")
         add_compile_options(-march=nehalem -mtune=nehalem -msse4.2 -mpopcnt
             -O3 -ffast-math -funroll-loops -fomit-frame-pointer -DNDEBUG)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-        message(STATUS "🚀 Optimizing for ARM64 Linux (Cortex-A72)")
+        message(STATUS "馃殌 Optimizing for ARM64 Linux (Cortex-A72)")
         add_compile_options(-march=armv8-a+crc+simd -mtune=cortex-a72
             -O3 -ffast-math -funroll-loops -fomit-frame-pointer -DNDEBUG)
     else()
@@ -1279,7 +1279,7 @@ elseif(IOS)
             XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
         )
-        message(STATUS "iOS signing: ad-hoc (no DEVELOPMENT_TEAM — simulator / jailbreak / TrollStore)")
+        message(STATUS "iOS signing: ad-hoc (no DEVELOPMENT_TEAM 鈥?simulator / jailbreak / TrollStore)")
     endif()
     
     target_include_directories(speedynote PRIVATE
@@ -1589,7 +1589,7 @@ endif()
 # the Resources block. _install_qtbase_translations() is defined there.
 
 if(IOS)
-    # iOS: No install targets — packaging is handled by ios/build-deb.sh and
+    # iOS: No install targets 鈥?packaging is handled by ios/build-deb.sh and
     # ios/build-speedynote.sh. qtbase_*.qm reaches the device via the
     # embedded qt_translations.qrc generated above (see "Qt translation
     # catalogs" section).
