@@ -4929,6 +4929,34 @@ private:
     VectorLayer::RenderTier chooseRenderTier(const QSizeF& tileSize,
                                              const QRectF& tileLocalViewport,
                                              QRectF* outFocusRect) const;
+
+    /**
+     * @brief Render the document into one viewport-space region using the
+     *        gesture's *target* zoom/pan instead of the live view state.
+     *
+     * The pan/zoom fast path in paintEvent draws a scaled snapshot of the
+     * pre-gesture frame; the snapshot cannot cover the strips a zoom-out or a
+     * pan exposes, which used to stay filled with the bare background color
+     * until the gesture ended. This helper paints those strips for real, with
+     * the target view state temporarily swapped in (the live m_zoomLevel /
+     * m_panOffset must not be touched mid-gesture - endZoomGesture() commits
+     * them), and with the focus cache suspended so the paint stays on the
+     * cache-free Direct tier.
+     */
+    void renderDocumentRegion(QPainter& painter, const QRect& viewportRegion);
+
+    /**
+     * @brief Render every visible page (paged mode) clipped to @p dirtyRect.
+     * Shared by the normal paint path and the gesture strip fill above.
+     */
+    void renderPagedPages(QPainter& painter, const QRect& dirtyRect);
+
+    /**
+     * @brief Paint whatever @p covered does not cover, live, for the gesture
+     *        fast paths. No-op when the snapshot already fills the widget.
+     * @param covered On-screen footprint of the cached frame, viewport coords.
+     */
+    void persistGestureContentAround(QPainter& painter, const QRectF& covered);
     
     /**
      * @brief Render a single tile's strokes and objects.

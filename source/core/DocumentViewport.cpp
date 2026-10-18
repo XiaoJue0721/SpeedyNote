@@ -3099,6 +3099,10 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
             
             painter.drawPixmap(QRectF(scaledOrigin, scaledSize), m_gesture.cachedFrame, 
                               m_gesture.cachedFrame.rect());
+            // A zoom-out exposes a growing border the scaled snapshot cannot
+            // cover. Render it live at the target view state instead of leaving
+            // it as bare background until the gesture ends.
+            persistGestureContentAround(painter, QRectF(scaledOrigin, scaledSize));
         } else if (m_gesture.activeType == ViewportGestureState::Pan) {
             perfSample.setPath(ViewportPerfMonitor::FramePath::GesturePan);
             // PAN: Shift the cached frame by pan delta
@@ -3116,6 +3120,9 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
             fillBackgroundAround(painter, QRectF(panDeltaPixels, logicalSize));
             
             painter.drawPixmap(panDeltaPixels, m_gesture.cachedFrame);
+            // Same live fill for the strip a pan drags into view behind the
+            // frame.
+            persistGestureContentAround(painter, QRectF(panDeltaPixels, logicalSize));
         } else {
             // Defensive: ViewportGestureState::ZoomAndPan is declared but never
             // assigned. If that changes, clear rather than present a stale
@@ -3218,46 +3225,9 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
     }
     
     // ========== PAGED MODE ==========
-    // Get visible pages to render
-    QVector<int> visible = visiblePages();
-    
-    // Apply view transform
-    painter.save();
-    painter.translate(-m_panOffset.x() * m_zoomLevel, -m_panOffset.y() * m_zoomLevel);
-    painter.scale(m_zoomLevel, m_zoomLevel);
-    
-    // Render each visible page
-    // For partial updates, only render pages that intersect the dirty region
-    for (int pageIdx : visible) {
-        Page* page = m_document->page(pageIdx);
-        if (!page) continue;
-        
-        // Get page position once (O(1) with cache, but avoid redundant calls)
-        QPointF pos = pagePosition(pageIdx);
-        
-        // Check if this page intersects the dirty region (optimization for partial updates)
-        if (isPartialUpdate) {
-            QRectF pageRectInViewport = QRectF(
-                (pos.x() - m_panOffset.x()) * m_zoomLevel,
-                (pos.y() - m_panOffset.y()) * m_zoomLevel,
-                page->size.width() * m_zoomLevel,
-                page->size.height() * m_zoomLevel
-            );
-            if (!pageRectInViewport.intersects(dirtyRect)) {
-                continue;  // Skip this page - it doesn't intersect dirty region
-            }
-        }
-        
-        painter.save();
-        painter.translate(pos);
-        
-        // Render the page (background + content)
-        renderPage(painter, page, pageIdx);
-        
-        painter.restore();
-    }
-    
-    painter.restore();
+    // Shared with the gesture fast path's exposed-strip fill so both paths draw
+    // pages identically (see renderDocumentRegion).
+    renderPagedPages(painter, dirtyRect);
     
     // Render current stroke with incremental caching (Task 2.3)
     // This is done AFTER restoring the painter transform because the cache
@@ -19135,6 +19105,87 @@ DocumentViewport::chooseRenderTier(const QSizeF& tileSize,
         *outFocusRect = tileLocalViewport.intersected(tileBounds);
     }
     return m_focusCacheSuspended ? Tier::Direct : Tier::Focus;
+}
+
+void DocumentViewport::persistGestureContentAround(QPainter& painter, const QRectF& covered)
+{
+    if (!m_document) return;
+    const QRect all(rect());
+    if (all.isEmpty()) return;
+
+    // Clip the snapshot's on-screen footprint to the widget, then subtract it.
+    // What remains is the strip(s) a zoom-out or a pan exposes, which the cached
+    // frame physically cannot cover and which used to stay bare background until
+    // the gesture ended.
+    const QRegion uncovered = QRegion(all).subtracted(
+        QRegion(covered.toAlignedRect().intersected(all)));
+    for (const QRect& gap : uncovered) {
+        renderDocumentRegion(painter, gap);
+    }
+}
+
+void DocumentViewport::renderDocumentRegion(QPainter& painter, const QRect& viewportRegion)
+{
+    if (!m_document || viewportRegion.isEmpty()) return;
+
+    // Paint with the gesture's *target* view state. The live m_zoomLevel /
+    // m_panOffset deliberately stay at their pre-gesture values until
+    // endZoomGesture() commits the final zoom, so they cannot be used for this
+    // fill without corrupting the values the rest of the fast path relies on.
+    const qreal savedZoom = m_zoomLevel;
+    const QPointF savedPan = m_panOffset;
+    const bool savedSuspended = m_focusCacheSuspended;
+    m_zoomLevel = m_gesture.targetZoom;
+    m_panOffset = m_gesture.targetPan;
+    m_focusCacheSuspended = true;  // stay on the cache-free Direct tier
+
+    painter.save();
+    painter.setClipRect(viewportRegion);
+    painter.fillRect(viewportRegion, m_backgroundColor);
+    if (m_document->isEdgeless()) {
+        renderEdgelessMode(painter, viewportRegion);
+    } else {
+        renderPagedPages(painter, viewportRegion);
+    }
+    painter.restore();
+
+    m_zoomLevel = savedZoom;
+    m_panOffset = savedPan;
+    m_focusCacheSuspended = savedSuspended;
+}
+
+void DocumentViewport::renderPagedPages(QPainter& painter, const QRect& dirtyRect)
+{
+    if (!m_document) return;
+
+    const QVector<int> visible = visiblePages();
+
+    painter.save();
+    painter.translate(-m_panOffset.x() * m_zoomLevel, -m_panOffset.y() * m_zoomLevel);
+    painter.scale(m_zoomLevel, m_zoomLevel);
+
+    for (int pageIdx : visible) {
+        Page* page = m_document->page(pageIdx);
+        if (!page) continue;
+
+        const QPointF pos = pagePosition(pageIdx);
+
+        // Skip pages that cannot touch the damaged region. Cheap, and keeps the
+        // partial-update path identical to the full repaint.
+        const QRectF pageRectInViewport(
+            (pos.x() - m_panOffset.x()) * m_zoomLevel,
+            (pos.y() - m_panOffset.y()) * m_zoomLevel,
+            page->size.width() * m_zoomLevel,
+            page->size.height() * m_zoomLevel);
+        if (!pageRectInViewport.intersects(dirtyRect)) continue;
+
+        painter.save();
+        painter.translate(pos);
+        renderPage(painter, page, pageIdx);
+        painter.restore();
+    }
+
+    painter.restore();
 }
 
 void DocumentViewport::renderPage(QPainter& painter, Page* page, int pageIndex)
