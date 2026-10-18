@@ -24,6 +24,7 @@
 #include "../ui/widgets/ActionBarButton.h"
 #include "../../markdown/qmarkdowntextedit.h"
 
+#include <QFontMetrics>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
@@ -3092,6 +3093,8 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
             renderPagedPages(painter, rect());
         }
 
+        drawZoomBadge(painter);
+
         m_zoomLevel = savedZoom;
         m_panOffset = savedPan;
         m_focusCacheSuspended = savedFocusSuspended;
@@ -3271,6 +3274,8 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
         // Debug overlay is now handled by DebugOverlay widget (source/ui/DebugOverlay.cpp)
         // Toggle with Ctrl+Shift+D
 
+        drawZoomBadge(painter);
+
         return;  // Done with edgeless rendering
     }
     
@@ -3357,6 +3362,8 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
     
     // Debug overlay is now handled by DebugOverlay widget (source/ui/DebugOverlay.cpp)
     // Toggle with Ctrl+Shift+D
+
+    drawZoomBadge(painter);
 }
 
 // ============================================================================
@@ -19253,6 +19260,47 @@ void DocumentViewport::renderPagedPages(QPainter& painter, const QRect& dirtyRec
     painter.restore();
 }
 
+void DocumentViewport::drawZoomBadge(QPainter& painter)
+{
+    const qreal zoom = m_zoomLevel;
+    if (!(zoom > 0.0)) return;
+
+    // Whole percent reads best in the normal range. Once the user is far out
+    // a whole number is too coarse to be useful ("2%" vs "2%"), so below 10%
+    // keep one decimal.
+    const QString text = (zoom < 0.0995)
+        ? QStringLiteral("%1%").arg(zoom * 100.0, 0, 'f', 1)
+        : QStringLiteral("%1%").arg(qRound(zoom * 100.0));
+
+    QFont badgeFont = font();
+    const qreal basePt = badgeFont.pointSizeF() > 0.0 ? badgeFont.pointSizeF() : 10.0;
+    badgeFont.setPointSizeF(qMax(8.0, basePt * 0.9));
+    badgeFont.setBold(true);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setFont(badgeFont);
+
+    const QFontMetricsF fm(badgeFont);
+    const qreal padX = 10.0;
+    const qreal padY = 5.0;
+    const qreal margin = 16.0;
+    const qreal boxW = fm.boundingRect(text).width() + padX * 2.0;
+    const qreal boxH = fm.height() + padY * 2.0;
+
+    QRectF box(width() - boxW - margin, height() - boxH - margin, boxW, boxH);
+    if (box.left() < 0.0) box.moveLeft(0.0);   // very narrow widget
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 115));
+    painter.drawRoundedRect(box, boxH / 2.0, boxH / 2.0);
+
+    painter.setPen(QColor(255, 255, 255, 235));
+    painter.drawText(box, Qt::AlignCenter, text);
+    painter.restore();
+}
+
 void DocumentViewport::renderPage(QPainter& painter, Page* page, int pageIndex)
 {
     if (!page || !m_document) return;
@@ -19872,14 +19920,16 @@ qreal DocumentViewport::minZoomForEdgeless() const
     //
     // Memory: 9 tiles × ~4MB each = ~36MB stroke cache at zoom 1.0, DPR 1.0
     
-    constexpr qreal maxVisibleSize = 2.0 * Document::EDGELESS_TILE_SIZE;  // 2048
-    
-    // Use logical pixels (Qt handles DPI automatically)
-    qreal minZoomX = static_cast<qreal>(width()) / maxVisibleSize;
-    qreal minZoomY = static_cast<qreal>(height()) / maxVisibleSize;
-    
-    // Take the larger (more restrictive) value, with 10% floor
-    return qMax(qMax(minZoomX, minZoomY), 0.1);
+    // NOTE: the tile-budget rule described above no longer sets the floor.
+    // It capped zoom-out at roughly 36% on a tablet to bound how many tiles get
+    // painted per frame, which is exactly what made the canvas feel like it had
+    // an invisible wall.
+    //
+    // Zooming out is only expensive for tiles that actually carry ink: a blank
+    // region costs nothing, because tilesInRect() never materialises coordinates
+    // nobody ever drew on. So the floor is now the shared MIN_ZOOM (2%) - low
+    // enough to take in a very large canvas at a glance.
+    return MIN_ZOOM;
 }
 
 qreal DocumentViewport::effectivePdfDpi() const

@@ -3050,8 +3050,10 @@ private:
     bool m_autoLayoutEnabled = false;  ///< Auto 1/2 column mode (default: 1-column only)
     
     // ----- Zoom Limits -----
-    /// CUSTOMIZABLE: Minimum zoom level (power user setting, range: 0.05-0.5)
-    static constexpr qreal MIN_ZOOM = 0.1;   // 10%
+    /// CUSTOMIZABLE: Minimum zoom level (power user setting).
+    /// Lowered from 0.1 so the whole canvas of a long document can be taken in
+    /// at once; edgeless mode has its own floor (minZoomForEdgeless).
+    static constexpr qreal MIN_ZOOM = 0.02;   // 2%
     /// CUSTOMIZABLE: Maximum zoom level (power user setting, range: 5.0-20.0)
     static constexpr qreal MAX_ZOOM = 10.0;  // 1000%
 
@@ -4957,6 +4959,16 @@ private:
      * @param covered On-screen footprint of the cached frame, viewport coords.
      */
     void persistGestureContentAround(QPainter& painter, const QRectF& covered);
+
+    /**
+     * @brief Paint the current zoom ratio as a small badge in the bottom-right
+     *        corner of the viewport (e.g. "37%").
+     *
+     * Called from every paint path that can return early - the live gesture
+     * fill, edgeless, and paged - so the reading does not vanish mid-pinch,
+     * which is exactly when the user wants to know where the zoom stands.
+     */
+    void drawZoomBadge(QPainter& painter);
     
     /**
      * @brief Render a single tile's strokes and objects.
