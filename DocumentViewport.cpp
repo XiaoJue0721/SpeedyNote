@@ -3050,6 +3050,56 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     // Note: Antialiasing is deferred until after gesture fast paths.
     // Gesture paths only blit cached pixmaps and don't need it.
+
+    // ========== GESTURE: LIVE RENDER (replaces the snapshot blit) ==========
+    // The cached-snapshot path below can only ever present what was already on
+    // screen when the gesture started. Everything the gesture reveals is
+    // invisible to it: the border a zoom-out uncovers, the strip a pan drags in,
+    // and - on an edgeless canvas - the lazily built tiles for the newly visible
+    // area. Filling the uncovered strips afterwards cannot repair that, because
+    // the snapshot path returns before any renderer runs, so those tiles were
+    // never requested and simply do not exist yet.
+    //
+    // So render the target view state directly. It costs frames, but a pinch
+    // that withholds content is not a pinch, and reaching for something you can
+    // already see should never require waiting for the gesture to end.
+    if (m_gesture.isActive() && m_gesture.startZoom > 0 && m_document) {
+        perfSample.setPath(m_gesture.activeType == ViewportGestureState::Pan
+                               ? ViewportPerfMonitor::FramePath::GesturePan
+                               : ViewportPerfMonitor::FramePath::GestureZoom);
+
+        const qreal savedZoom = m_zoomLevel;
+        const QPointF savedPan = m_panOffset;
+        const bool savedFocusSuspended = m_focusCacheSuspended;
+
+        // Rebuild the view state exactly the way endZoomGesture() commits it, so
+        // the frame shown in flight and the frame shown after release agree.
+        // The centroid drag is added on top of the zoom-centre correction; for a
+        // pure pan targetZoom == startZoom and the correction term vanishes.
+        const qreal minZ = m_document->isEdgeless() ? minZoomForEdgeless() : MIN_ZOOM;
+        m_zoomLevel = qBound(minZ, m_gesture.targetZoom, MAX_ZOOM);
+        const QPointF center = m_gesture.zoomCenter;
+        const QPointF docPtAtCenter = center / m_gesture.startZoom + m_gesture.startPan;
+        m_panOffset = docPtAtCenter - center / m_zoomLevel
+                      + (m_gesture.targetPan - m_gesture.startPan);
+        m_focusCacheSuspended = true;  // cache-free Direct tier while moving
+
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.fillRect(rect(), m_backgroundColor);
+        if (m_document->isEdgeless()) {
+            renderEdgelessMode(painter, rect());
+        } else {
+            renderPagedPages(painter, rect());
+        }
+
+        m_zoomLevel = savedZoom;
+        m_panOffset = savedPan;
+        m_focusCacheSuspended = savedFocusSuspended;
+        return;
+    }
+
+    // Fallback: a gesture with no document or an unusable start zoom still blits
+    // the snapshot, which is all that can be done without a view state to build.
     
     // ========== FAST PATH: Viewport Gesture (Zoom or Pan) ==========
     // During viewport gestures, draw transformed cached frame instead of re-rendering.
