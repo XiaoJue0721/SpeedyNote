@@ -464,6 +464,8 @@ bool TouchGestureHandler::handleTouchEvent(QTouchEvent* event)
             m_pinchStartDistance = distance;
             m_initialDistance = distance;   // For zoom threshold calculation
             m_zoomActivated = false;        // Zoom starts inactive (dead zone)
+            m_pinchLockedToPan = false;
+            m_pinchArmTimer.start();
             m_smoothedScale = 1.0;          // Reset smoothed scale
             
             m_viewport->beginZoomGesture(centroid);
@@ -644,6 +646,8 @@ bool TouchGestureHandler::handleTouchEvent(QTouchEvent* event)
             m_pinchStartDistance = distance;
             m_initialDistance = distance;   // For zoom threshold calculation
             m_zoomActivated = false;        // Zoom starts inactive (dead zone)
+            m_pinchLockedToPan = false;
+            m_pinchArmTimer.start();
             m_smoothedScale = 1.0;          // Reset smoothed scale
             
             // Begin deferred zoom gesture at centroid
@@ -706,14 +710,25 @@ bool TouchGestureHandler::handleTouchEvent(QTouchEvent* event)
                     distance = 1.0;
                 }
                 
-                // Check if zoom should be activated (activation threshold)
-                // This prevents accidental zoom during 2-finger pan
-                if (!m_zoomActivated && m_initialDistance > 0) {
+                // Arm the zoom branch on a distance change, or give up and keep
+                // the gesture a pan for good once the grace window passes. The
+                // panel reports a few percent of distance noise while two
+                // fingers drag in parallel, so without the deadline a wobble can
+                // arm zoom halfway through a drag and yank the scale out from
+                // under the user. The deadline is what tells the two gestures
+                // apart: a real pinch covers this much distance almost at once,
+                // a parallel drag never does.
+                if (!m_zoomActivated && !m_pinchLockedToPan && m_initialDistance > 0) {
                     qreal distanceChange = std::abs(distance - m_initialDistance) / m_initialDistance;
                     if (distanceChange > ZOOM_ACTIVATION_THRESHOLD) {
                         m_zoomActivated = true;
 #ifdef SPEEDYNOTE_DEBUG
                         qDebug() << "[TouchGestureHandler] Zoom activated! change:" << distanceChange;
+#endif
+                    } else if (m_pinchArmTimer.elapsed() > ZOOM_ARM_GRACE_MS) {
+                        m_pinchLockedToPan = true;
+#ifdef SPEEDYNOTE_DEBUG
+                        qDebug() << "[TouchGestureHandler] Zoom never armed within grace, locking to pan";
 #endif
                     }
                 }
@@ -943,6 +958,8 @@ bool TouchGestureHandler::handleTwoFingerGestureNative(QTouchEvent* event,
         m_pinchStartDistance = distance;
         m_initialDistance = distance;
         m_zoomActivated = false;
+        m_pinchLockedToPan = false;
+        m_pinchArmTimer.start();
         m_smoothedScale = 1.0;
         m_viewport->beginZoomGesture(centroid);
         
@@ -954,14 +971,17 @@ bool TouchGestureHandler::handleTwoFingerGestureNative(QTouchEvent* event,
         // Update existing pinch - apply zoom smoothing
         qreal rawScale = distance / m_pinchStartDistance;
         
-        // Activate zoom if threshold exceeded
-        if (!m_zoomActivated && m_initialDistance > 0) {
+        // Activate zoom if threshold exceeded; otherwise lock to pan once the
+        // grace window passes, exactly like the Qt-event path above.
+        if (!m_zoomActivated && !m_pinchLockedToPan && m_initialDistance > 0) {
             qreal distanceChange = std::abs(distance - m_initialDistance) / m_initialDistance;
             if (distanceChange > ZOOM_ACTIVATION_THRESHOLD) {
                 m_zoomActivated = true;
 #ifdef SPEEDYNOTE_DEBUG
                 qDebug() << "[TouchGestureHandler] NATIVE zoom activated! change:" << distanceChange;
 #endif
+            } else if (m_pinchArmTimer.elapsed() > ZOOM_ARM_GRACE_MS) {
+                m_pinchLockedToPan = true;
             }
         }
         

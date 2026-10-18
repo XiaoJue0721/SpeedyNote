@@ -112,11 +112,22 @@ private:
     qreal m_pinchStartDistance = 0;          ///< Distance between fingers at start (for incremental scaling)
     qreal m_initialDistance = 0;             ///< Distance at gesture start (for zoom threshold)
     bool m_zoomActivated = false;            ///< Whether zoom threshold has been exceeded
+    bool m_pinchLockedToPan = false;         ///< Grace window elapsed unarmed: this gesture is a pan for good
+    QElapsedTimer m_pinchArmTimer;           ///< Time spent in the dead zone, for ZOOM_ARM_GRACE_MS
     qreal m_smoothedScale = 1.0;             ///< Exponentially smoothed scale factor
     
-    // Zoom dead zone: don't zoom until finger distance changes by this percentage
-    // This prevents zoom "shaking" during pan-only 2-finger gestures
-    static constexpr qreal ZOOM_ACTIVATION_THRESHOLD = 0.1;  ///< 10% change required to activate
+    // Distance change that arms the zoom branch. A two-finger drag moves the
+    // centroid but barely the distance, so this only has to clear the touch
+    // panel's noise floor. 10% was high enough that an ordinary pinch could
+    // finish without ever arming - and the release then committed the untouched
+    // start zoom, which is the "it scales while I pinch, then springs back on
+    // release" report.
+    static constexpr qreal ZOOM_ACTIVATION_THRESHOLD = 0.04;  ///< 4% distance change arms zoom
+
+    // Once held for this long without the distance ever leaving the dead zone,
+    // the gesture is locked to pan: a two-finger drag that wobbles by a few
+    // percent across its whole life must not toggle zoom halfway through.
+    static constexpr qint64 ZOOM_ARM_GRACE_MS = 250;
     
     // Scale dead zone: treat scale values within this range of 1.0 as exactly 1.0
     // This prevents zoom jitter from small finger distance variations

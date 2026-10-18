@@ -274,6 +274,12 @@ DocumentViewport::DocumentViewport(QWidget* parent)
         update();
     });
 
+    // Auto-layout settle timer. Deciding 1- vs 2-column layout changes the page
+    // geometry, so it must not run while a pinch is still moving the zoom.
+    m_autoLayoutTimer = new QTimer(this);
+    m_autoLayoutTimer->setSingleShot(true);
+    connect(m_autoLayoutTimer, &QTimer::timeout, this, &DocumentViewport::checkAutoLayout);
+
     // Tablet hover timer - detects when stylus leaves viewport by timeout
     // When stylus hovers to another widget, we stop receiving TabletMove events.
     // This timer fires if no tablet hover event received within the interval.
@@ -779,6 +785,25 @@ void DocumentViewport::checkAutoLayout()
     // Only switch if different (avoids redundant invalidation)
     if (targetMode != m_layoutMode) {
         setLayoutMode(targetMode);
+    }
+}
+
+void DocumentViewport::scheduleAutoLayoutCheck()
+{
+    // Switching layout re-centres horizontally and re-clamps the pan, which is
+    // far too heavy to run in the middle of a pinch and visibly fights the
+    // gesture when it fires on release. Defer it until the view has settled:
+    // every further zoom restarts the timer, so a continuous pinch only pays
+    // for one layout decision at the end.
+    if (!m_autoLayoutEnabled) {
+        return;
+    }
+    if (m_autoLayoutTimer) {
+        m_autoLayoutTimer->start(AUTO_LAYOUT_SETTLE_MS);
+    } else {
+        // No timer (const construction path or a headless test): fall back to
+        // the synchronous check so behaviour never silently disappears.
+        checkAutoLayout();
     }
 }
 
@@ -3105,15 +3130,37 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
                 renderPagedPages(painter, rect());
             }
         } else {
+            // Very small zoom deltas are not worth a full re-rasterisation: at
+            // under ~1% the resampled previous frame is visually identical, and
+            // skipping the render keeps a slow pinch at full frame rate instead
+            // of stuttering on every event. The commit at gesture end still
+            // runs at full resolution, so nothing is lost.
+            const qreal zoomRatio =
+                (m_gesture.startZoom > 0.0) ? targetZoom / m_gesture.startZoom : 1.0;
+            const bool negligibleZoom = qAbs(zoomRatio - 1.0) < 0.01;
+
+            if (negligibleZoom && !m_gestureFrameBuffer.isNull()) {
+                // Reuse the last frame; only the pan moved.
+                painter.setRenderHint(QPainter::Antialiasing, false);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.drawImage(QPointF(0, 0), m_gestureFrameBuffer);
+                drawZoomBadge(painter);
+                m_zoomLevel = savedZoom;
+                m_panOffset = savedPan;
+                m_focusCacheSuspended = savedFocusSuspended;
+                return;
+            }
+
             // Draw the frame off-screen at reduced resolution, then blit it up.
             // A pinch is judged by how well it tracks the fingers, not by how
             // crisp the strokes are while they move - and per-stroke polygon
             // rasterisation costs roughly one unit of work per covered pixel, so
             // halving each axis cuts the dominant cost about 4x. The frame
             // committed when the gesture ends is still drawn at full resolution,
-            // so nothing is lost once the fingers lift.
+            // so nothing is lost once the fingers lift. Zooming out needs the
+            // cheapest frame, so it gets the coarser divisor.
             const qreal dpr = devicePixelRatioF();
-            const int downsample = (m_zoomLevel < 0.25) ? 3 : 2;
+            const int downsample = (m_zoomLevel < 0.5) ? 3 : 2;
             const QSize bufferPx(qMax(1, qRound(width() * dpr / downsample)),
                                  qMax(1, qRound(height() * dpr / downsample)));
             if (m_gestureFrameBuffer.size() != bufferPx) {
@@ -4940,12 +4987,25 @@ void DocumentViewport::endZoomGesture()
     QPointF centroidPanDelta = m_gesture.targetPan - m_gesture.startPan;
     QPointF newPan = zoomCorrectedPan + centroidPanDelta;
     
+    // A pinch that never armed zoom (a two-finger drag) still arrives here with
+    // finalZoom == startZoom. Committing the zoom-centre correction in that case
+    // would move the page by exactly the amount the fingers dragged it, and then
+    // the centroid delta below would move it again - a visible jump on release,
+    // and the reason a pure drag used to end somewhere other than where it was
+    // released. With no zoom change there is nothing to correct: the pan already
+    // tracks the fingers.
+    const bool zoomActuallyChanged = finalZoom > 0.0
+                                     && !qFuzzyCompare(finalZoom, m_gesture.startZoom);
+    QPointF committedPan = zoomActuallyChanged
+                          ? newPan
+                          : m_gesture.startPan + centroidPanDelta;
+    
     // Clear gesture state BEFORE applying zoom (to avoid recursion in paintEvent)
     m_gesture.reset();
     
     // Apply final zoom and pan
     m_zoomLevel = finalZoom;
-    m_panOffset = newPan;
+    m_panOffset = committedPan;
     
     // Invalidate PDF cache (DPI changed)
     invalidatePdfCache();
@@ -4961,8 +5021,10 @@ void DocumentViewport::endZoomGesture()
     // Trigger full re-render at new DPI
     update();
     
-    // Check if auto-layout should switch modes (zoom level changed)
-    checkAutoLayout();
+    // Check if auto-layout should switch modes (zoom level changed). Deferred:
+    // doing it here re-centres and re-clamps the pan that was just committed,
+    // which reads as the pinch snapping to a different position on release.
+    scheduleAutoLayoutCheck();
     
     // Update PDF cache capacity (visible pages may have changed)
     updatePdfCacheCapacity();

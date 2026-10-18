@@ -4051,6 +4051,13 @@ private:
      */
     void checkAutoLayout();
     
+    /// Defer checkAutoLayout() until the view stops moving. A layout switch
+    /// re-centres and re-clamps the pan, so running it on release makes the
+    /// pinch appear to snap backwards.
+    void scheduleAutoLayoutCheck();
+    QTimer* m_autoLayoutTimer = nullptr;  ///< Settle timer for the deferred layout check
+    static constexpr int AUTO_LAYOUT_SETTLE_MS = 220;  ///< Stillness required before switching layout
+    
     /**
      * @brief Recenter content horizontally in viewport.
      * 
