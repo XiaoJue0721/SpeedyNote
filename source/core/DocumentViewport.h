@@ -3827,6 +3827,10 @@ private:
         }
     };
     ViewportGestureState m_gesture;
+    /// Off-screen frame buffer reused across gesture repaints. Rendering into
+    /// a reduced-resolution image and blitting it up is what keeps a pinch
+    /// responsive; reallocating it every frame would undo most of that win.
+    QImage m_gestureFrameBuffer;
     QTimer* m_gestureTimeoutTimer = nullptr;  ///< Fallback gesture end detection
     static constexpr int GESTURE_TIMEOUT_MS = 3000;  ///< Timeout for gesture end fallback (3s)
     bool m_backtickHeld = false;  ///< Track backtick (`) key for deferred vertical pan

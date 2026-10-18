@@ -3078,19 +3078,77 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
         // The centroid drag is added on top of the zoom-centre correction; for a
         // pure pan targetZoom == startZoom and the correction term vanishes.
         const qreal minZ = m_document->isEdgeless() ? minZoomForEdgeless() : MIN_ZOOM;
-        m_zoomLevel = qBound(minZ, m_gesture.targetZoom, MAX_ZOOM);
+        const qreal targetZoom = qBound(minZ, m_gesture.targetZoom, MAX_ZOOM);
         const QPointF center = m_gesture.zoomCenter;
         const QPointF docPtAtCenter = center / m_gesture.startZoom + m_gesture.startPan;
-        m_panOffset = docPtAtCenter - center / m_zoomLevel
-                      + (m_gesture.targetPan - m_gesture.startPan);
-        m_focusCacheSuspended = true;  // cache-free Direct tier while moving
+        const QPointF targetPan = docPtAtCenter - center / targetZoom
+                                  + (m_gesture.targetPan - m_gesture.startPan);
 
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.fillRect(rect(), m_backgroundColor);
-        if (m_document->isEdgeless()) {
-            renderEdgelessMode(painter, rect());
+        // Only a zoom that actually moves invalidates the stroke caches. A pan
+        // leaves the zoom alone, so everything the renderer needs already
+        // exists - blitting it at full resolution is both sharper and much
+        // cheaper than the resampled cache-free path below.
+        const bool zoomChanging = !qFuzzyCompare(targetZoom, savedZoom);
+
+        m_zoomLevel = targetZoom;
+        m_panOffset = targetPan;
+        m_focusCacheSuspended = zoomChanging;
+
+        if (!zoomChanging) {
+            // Pure pan: one whole-page blit per tile, no resampling and no
+            // per-stroke rasterisation, drawn straight to the widget.
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.fillRect(rect(), m_backgroundColor);
+            if (m_document->isEdgeless()) {
+                renderEdgelessMode(painter, rect());
+            } else {
+                renderPagedPages(painter, rect());
+            }
         } else {
-            renderPagedPages(painter, rect());
+            // Draw the frame off-screen at reduced resolution, then blit it up.
+            // A pinch is judged by how well it tracks the fingers, not by how
+            // crisp the strokes are while they move - and per-stroke polygon
+            // rasterisation costs roughly one unit of work per covered pixel, so
+            // halving each axis cuts the dominant cost about 4x. The frame
+            // committed when the gesture ends is still drawn at full resolution,
+            // so nothing is lost once the fingers lift.
+            const qreal dpr = devicePixelRatioF();
+            const int downsample = (m_zoomLevel < 0.25) ? 3 : 2;
+            const QSize bufferPx(qMax(1, qRound(width() * dpr / downsample)),
+                                 qMax(1, qRound(height() * dpr / downsample)));
+            if (m_gestureFrameBuffer.size() != bufferPx) {
+                m_gestureFrameBuffer = QImage(bufferPx, QImage::Format_ARGB32_Premultiplied);
+            }
+            m_gestureFrameBuffer.setDevicePixelRatio(dpr / downsample);
+
+            if (m_gestureFrameBuffer.isNull()) {
+                // Allocation failed: fall back to painting straight to the screen
+                // rather than showing an empty frame.
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.fillRect(rect(), m_backgroundColor);
+                if (m_document->isEdgeless()) {
+                    renderEdgelessMode(painter, rect());
+                } else {
+                    renderPagedPages(painter, rect());
+                }
+            } else {
+                QPainter framePainter(&m_gestureFrameBuffer);
+                // The buffer advertises a matching device pixel ratio, so its
+                // logical coordinate system is identical to the widget's and every
+                // render entry point below works unchanged; only the pixel density
+                // differs.
+                framePainter.fillRect(QRectF(0, 0, width(), height()), m_backgroundColor);
+                if (m_document->isEdgeless()) {
+                    renderEdgelessMode(framePainter, rect());
+                } else {
+                    renderPagedPages(framePainter, rect());
+                }
+                framePainter.end();
+
+                painter.setRenderHint(QPainter::Antialiasing, false);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.drawImage(QPointF(0, 0), m_gestureFrameBuffer);
+            }
         }
 
         drawZoomBadge(painter);
@@ -4797,10 +4855,11 @@ void DocumentViewport::beginZoomGesture(QPointF centerPoint)
     m_gesture.initialCentroid = centerPoint;
     m_gesture.initialCentroidSet = true;
     
-    // Capture current viewport as cached frame for fast scaling
-    m_gesture.cachedFrame = grabOpaqueViewport();
-    // Store device pixel ratio for correct scaling on high-DPI displays
-    m_gesture.frameDevicePixelRatio = m_gesture.cachedFrame.devicePixelRatio();
+    // No snapshot is taken: the gesture paints the live scene instead (see the
+    // live-render branch in paintEvent), so grabbing the viewport here would
+    // only add a full-viewport copy to the start of every pinch.
+    m_gesture.cachedFrame = QPixmap();
+    m_gesture.frameDevicePixelRatio = devicePixelRatioF();
     
     // Grab keyboard focus to receive keyReleaseEvent when modifier is released
     setFocus(Qt::OtherFocusReason);
@@ -4932,10 +4991,9 @@ void DocumentViewport::beginPanGesture()
     m_gesture.startPan = m_panOffset;
     m_gesture.targetPan = m_panOffset;
     
-    // Capture current viewport as cached frame for fast shifting
-    m_gesture.cachedFrame = grabOpaqueViewport();
-    // Store device pixel ratio for correct positioning on high-DPI displays
-    m_gesture.frameDevicePixelRatio = m_gesture.cachedFrame.devicePixelRatio();
+    // See beginZoomGesture: the gesture renders live, so no snapshot is taken.
+    m_gesture.cachedFrame = QPixmap();
+    m_gesture.frameDevicePixelRatio = devicePixelRatioF();
     
     // Grab keyboard focus to receive keyReleaseEvent when modifier is released
     setFocus(Qt::OtherFocusReason);
@@ -19150,6 +19208,34 @@ DocumentViewport::chooseRenderTier(const QSizeF& tileSize,
         effScale * pageMaxDim > VectorLayer::MAX_STROKE_CACHE_DIM;
 
     const QRectF tileBounds(QPointF(0, 0), tileSize);
+
+    if (m_gesture.isActive()) {
+        // Compared against the zoom actually being painted (the gesture branch
+        // in paintEvent has already swapped in the clamped target), not the raw
+        // target, so both sides of the pan/zoom split always agree - including
+        // when the target is clamped at the minimum zoom.
+        const bool zoomChanging =
+            !qFuzzyCompare(m_zoomLevel, m_gesture.startZoom);
+
+        if (!zoomChanging && tileLocalViewport.intersects(tileBounds)) {
+            // Pure pan (or a two-finger drag that keeps the finger distance):
+            // the zoom never moves, so every tile's whole-page pixmap was built
+            // at exactly this zoom and is still valid. One blit per tile beats
+            // re-rasterising every stroke, and unlike the focus cache it cannot
+            // miss as the viewport slides across the page.
+            return Tier::Capped;
+        }
+
+        // A zoom that changes on every frame invalidates any zoom-keyed cache,
+        // so there is nothing to keep and rasterising directly wins. An
+        // off-screen tile yields an empty focus rect, which culls every stroke
+        // immediately instead of painting anything.
+        if (outFocusRect) {
+            *outFocusRect = tileLocalViewport.intersected(tileBounds);
+        }
+        return Tier::Direct;
+    }
+
     // If the cap would not kick in at the current zoom, the legacy capped
     // pixmap is sharp and small; nothing to gain from the focus cache.
     // If the tile is entirely off-screen, the user can't see the blur, so
@@ -19559,7 +19645,19 @@ void DocumentViewport::renderEdgelessMode(QPainter& painter, const QRect& dirtyR
         
         // Check if tile exists - use its settings, otherwise use document defaults
         Page* tile = m_document->getTile(coord.first, coord.second);
-        
+
+        // Far out, a tile's grid spacing collapses to well under a pixel, so the
+        // pattern paints hundreds of overlapping lines whose result is
+        // indistinguishable from a flat fill. Fill instead of drawing them.
+        const qreal patternSpacing = tile
+            ? qMin<qreal>(tile->gridSpacing, tile->lineSpacing)
+            : qMin<qreal>(m_document->defaultGridSpacing, m_document->defaultLineSpacing);
+        if (patternSpacing * m_zoomLevel < 3.0) {
+            painter.fillRect(tileRect,
+                             tile ? tile->backgroundColor : m_document->defaultBackgroundColor);
+            continue;
+        }
+
         if (tile) {
             // Existing tile: use its background settings
             Page::renderBackgroundPattern(
@@ -19949,7 +20047,16 @@ qreal DocumentViewport::effectivePdfDpi() const
     // 
     // Example: 200% Windows scaling (dpr=2.0) at zoom 1.0 → 192 DPI
     // Example: 100% scaling (dpr=1.0) at zoom 2.0 → 192 DPI
-    qreal scaledDpi = baseDpi * m_zoomLevel * dpr;
+    // While a pinch is in flight, hold the DPI at its pre-gesture value. The
+    // PDF cache is keyed by DPI, so a value that changes on every frame misses
+    // on every frame and kicks off a fresh async render per frame - which is
+    // exactly how a paged PDF document turns a pinch into a slideshow. The
+    // frame committed when the gesture ends invalidates the cache and
+    // re-renders at the new DPI, so sharpness catches up when the fingers lift.
+    const qreal zoomForDpi = (m_gesture.isActive() && m_gesture.startZoom > 0.0)
+                                 ? m_gesture.startZoom
+                                 : m_zoomLevel;
+    qreal scaledDpi = baseDpi * zoomForDpi * dpr;
     
     // Cap at reasonable maximum (300 DPI is print quality)
     // This prevents excessive memory usage at very high zoom on high DPI screens
