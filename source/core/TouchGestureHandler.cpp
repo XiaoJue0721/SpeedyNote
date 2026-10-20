@@ -161,6 +161,10 @@ void TouchGestureHandler::reset()
     m_initialDistance = 0;
     m_zoomActivated = false;
     m_smoothedScale = 1.0;
+    // The pan latch is new state that must be cleared with the rest: if it
+    // survived a reset, every following pinch would be locked out of zooming
+    // for good, because nothing else ever clears it.
+    m_pinchLockedToPan = false;
     
     // Clear velocity samples
     m_velocitySamples.clear();
@@ -210,6 +214,8 @@ void TouchGestureHandler::setMode(TouchGestureMode mode)
     m_initialDistance = 0;
     m_zoomActivated = false;
     m_smoothedScale = 1.0;
+    // See reset(): a surviving latch would permanently block zoom.
+    m_pinchLockedToPan = false;
     
     m_mode = mode;
 }

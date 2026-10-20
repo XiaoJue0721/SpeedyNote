@@ -3831,6 +3831,11 @@ private:
     /// a reduced-resolution image and blitting it up is what keeps a pinch
     /// responsive; reallocating it every frame would undo most of that win.
     QImage m_gestureFrameBuffer;
+    /// Zoom level m_gestureFrameBuffer was rendered at. The pinch blits this
+    /// cached frame scaled to the requested zoom and only re-renders once it
+    /// would be stretched or squeezed beyond tolerance, so this is what decides
+    /// when the expensive path runs. 0 = the buffer holds no usable frame.
+    qreal m_gestureFrameZoom = 0.0;
     QTimer* m_gestureTimeoutTimer = nullptr;  ///< Fallback gesture end detection
     static constexpr int GESTURE_TIMEOUT_MS = 3000;  ///< Timeout for gesture end fallback (3s)
     bool m_backtickHeld = false;  ///< Track backtick (`) key for deferred vertical pan

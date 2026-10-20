@@ -3151,6 +3151,51 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
                 return;
             }
 
+            // Scale the frame we already have instead of rasterising a new one.
+            //
+            // A pinch changes the zoom on every event, so re-rendering the page
+            // each time is the dominant cost - and it is wasted work: the picture
+            // being requested is the previous picture, magnified or shrunk, and
+            // the compositor can do that on the GPU for free. Redrawing only when
+            // the cached frame falls too far behind the requested scale (below)
+            // turns a per-event rasterisation into roughly a handful for the whole
+            // gesture, which is what makes the pinch follow the fingers.
+            const qreal dpr0 = devicePixelRatioF();
+            if (!m_gestureFrameBuffer.isNull() && m_gestureFrameZoom > 0.0) {
+                const qreal scaleRatio = targetZoom / m_gestureFrameZoom;
+                // Re-render only when the cached frame would be stretched or
+                // squeezed past these bounds. Zooming in past 1.35x would show
+                // visibly soft strokes, so the frame is rebuilt at the new size;
+                // shrinking is far more forgiving (the extra resolution is just
+                // averaged away), so it can run to 2.2x before a rebuild.
+                const bool tooBlurry = scaleRatio > 1.35;
+                const bool tooWasteful = scaleRatio < 0.45;
+                if (!tooBlurry && !tooWasteful) {
+                    // The cached frame is anchored the same way the committed
+                    // state is: the document point under the zoom centre stays
+                    // under the zoom centre. So the frame's top-left corner sits
+                    // at (centre/zoom - centre/targetZoom) in target screen
+                    // coordinates, and its scale is simply the ratio between the
+                    // zoom it was drawn at and the zoom now requested. Because
+                    // both use targetPan as the origin, the magnified frame lands
+                    // exactly where the release will leave it - no jump on lift.
+                    const QPointF frameOrigin(
+                        m_gesture.zoomCenter
+                            - m_gesture.zoomCenter * (targetZoom / m_gestureFrameZoom));
+                    const QSizeF drawnSize(width() * scaleRatio, height() * scaleRatio);
+
+                    painter.fillRect(rect(), m_backgroundColor);
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                    painter.setRenderHint(QPainter::Antialiasing, false);
+                    painter.drawImage(QRectF(frameOrigin, drawnSize), m_gestureFrameBuffer);
+                    drawZoomBadge(painter);
+                    m_zoomLevel = savedZoom;
+                    m_panOffset = savedPan;
+                    m_focusCacheSuspended = savedFocusSuspended;
+                    return;
+                }
+            }
+
             // Draw the frame off-screen at reduced resolution, then blit it up.
             // A pinch is judged by how well it tracks the fingers, not by how
             // crisp the strokes are while they move - and per-stroke polygon
@@ -3159,7 +3204,7 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
             // committed when the gesture ends is still drawn at full resolution,
             // so nothing is lost once the fingers lift. Zooming out needs the
             // cheapest frame, so it gets the coarser divisor.
-            const qreal dpr = devicePixelRatioF();
+            const qreal dpr = dpr0;
             const int downsample = (m_zoomLevel < 0.5) ? 3 : 2;
             const QSize bufferPx(qMax(1, qRound(width() * dpr / downsample)),
                                  qMax(1, qRound(height() * dpr / downsample)));
@@ -3191,6 +3236,11 @@ void DocumentViewport::paintEvent(QPaintEvent* event)
                     renderPagedPages(framePainter, rect());
                 }
                 framePainter.end();
+
+                // Remember which zoom this frame represents: the next few paints
+                // can then scale it instead of rendering, until it drifts too far
+                // (see the tooBlurry / tooWasteful bounds above).
+                m_gestureFrameZoom = m_zoomLevel;
 
                 painter.setRenderHint(QPainter::Antialiasing, false);
                 painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
@@ -4907,6 +4957,11 @@ void DocumentViewport::beginZoomGesture(QPointF centerPoint)
     // only add a full-viewport copy to the start of every pinch.
     m_gesture.cachedFrame = QPixmap();
     m_gesture.frameDevicePixelRatio = devicePixelRatioF();
+    // Drop the previous gesture's frame: it was rendered for a different zoom and
+    // a different scroll position, so scaling it here would show stale content.
+    // The first paint of this gesture therefore renders at full quality, and the
+    // frames after it can ride the cached one.
+    m_gestureFrameZoom = 0.0;
     
     // Grab keyboard focus to receive keyReleaseEvent when modifier is released
     setFocus(Qt::OtherFocusReason);
@@ -4917,9 +4972,17 @@ void DocumentViewport::beginZoomGesture(QPointF centerPoint)
 
 void DocumentViewport::updateZoomGesture(qreal scaleFactor, QPointF centerPoint)
 {
-    // Auto-begin gesture if not already active
+    // Auto-begin gesture if not already active. The begin can legitimately be
+    // refused (a stale gesture still latched, widget momentarily hidden), and
+    // in that case m_gesture still holds the *previous* gesture's start values.
+    // Accumulating onto those and later committing them in endZoomGesture() is
+    // what made a pinch appear to spring back to an older zoom after the note
+    // had been open for a while. Drop the frame instead of guessing.
     if (!m_gesture.isActive()) {
         beginZoomGesture(centerPoint);
+        if (!m_gesture.isActive()) {
+            return;
+        }
     }
     
 #ifdef SPEEDYNOTE_DEBUG
@@ -5066,9 +5129,14 @@ void DocumentViewport::beginPanGesture()
 
 void DocumentViewport::updatePanGesture(QPointF panDelta)
 {
-    // Auto-begin gesture if not already active
+    // Auto-begin gesture if not already active (see updateZoomGesture: a refused
+    // begin leaves the previous gesture's start values in place, so accumulating
+    // onto them would commit a stale pan on release).
     if (!m_gesture.isActive()) {
         beginPanGesture();
+        if (!m_gesture.isActive()) {
+            return;
+        }
     }
     
     // Accumulate pan offset (additive)
